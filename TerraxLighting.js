@@ -1153,13 +1153,15 @@ Imported.TerraxLighting = true;
 
 	}
 
+
+	// try optimizing for performance  (by Mikan 2021/08/10)
+	// redraw mask when render not update
+
 	/**
-	 * @method _updateAllSprites
+	 * @method _updateSpritesData
 	 * @private
 	 */
 	Lightmask.prototype._updateMask = function() {
-
-		StartTiming();
 
 		// ****** DETECT MAP CHANGES ********
 		var map_id = $gameMap.mapId();
@@ -1242,6 +1244,17 @@ Imported.TerraxLighting = true;
 			ReloadMapEvents();
 			//Graphics.Debug('EventSpawn', $gameMap.events().length);
 		}
+	};
+
+	/**
+	 * @method _updateSpritesTexture
+	 * @private
+	 */
+	Lightmask.prototype.updateMaskBitmap = function() {
+
+		StartTiming();
+
+		var map_id = $gameMap.mapId();
 
 		// remove old sprites
 		for (var i = 0; i < this._sprites.length; i++) {	  // remove all old sprites
@@ -2593,6 +2606,16 @@ Imported.TerraxLighting = true;
 		}
 		StopTiming();
 	};
+
+
+	Lightmask.prototype._renderWebGL = function (renderer) {
+		this.updateMaskBitmap();
+	};
+
+	Lightmask.prototype._renderCanvas = function (renderer) {
+		this.updateMaskBitmap();
+	};
+
 
 	/**
 	 * @method _addSprite
