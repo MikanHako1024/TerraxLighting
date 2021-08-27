@@ -68,6 +68,11 @@
  * Default : No
  * @default No
  *
+ * @param defaultUseWebGL
+ * @desc Use WebGL render
+ * Default : No
+ * @default No
+ * 
  * @help
  * To activate the script in an area, do the following:
  * 1. Put an event switch into the map.
@@ -216,6 +221,17 @@ Imported.TerraxLighting = true;
 
 (function() {
 
+
+/*!
+ * LightShadowSprite - v0.0.3
+ * Copyright (C) 2021 Mikan(MikanHako)
+ *
+ * LightShadowSprite is licensed under the MIT License.
+ * http://opensource.org/licenses/mit-license.php
+ */
+function MK_LightShadowSprite(){this.initialize.apply(this,arguments)}MK_LightShadowSprite.prototype=Object.create(Sprite.prototype),(MK_LightShadowSprite.prototype.constructor=MK_LightShadowSprite).prototype.initialize=function(t,e){t=0<t?t:Graphics.width,e=0<e?e:Graphics.height,Sprite.prototype.initialize.call(this),this.createRenderTexture(t,e),this.createContainerSprite(),this.createBlackSprite(t,e),this.blendMode=2},MK_LightShadowSprite.prototype.createRenderTexture=function(t,e){this.texture=PIXI.RenderTexture.create(t,e)},MK_LightShadowSprite.prototype.createContainerSprite=function(){this._container=new Sprite,this._container.visible=!1,this.addChild(this._container)},MK_LightShadowSprite.prototype.createBlackSprite=function(t,e){e=new Bitmap(t,e);e.fillAll("#000000"),this._blackSprite=new Sprite(e),this.addLightChild(this._blackSprite)},MK_LightShadowSprite.prototype.addLightChild=function(t){return this._container.addChild(...arguments)},MK_LightShadowSprite.prototype.addLightChildAt=function(t,e){return this._container.addChildAt(...arguments)},MK_LightShadowSprite.prototype.removeLightChild=function(t){return this._container.removeChild(...arguments)},MK_LightShadowSprite.prototype.removeLightChildAt=function(t){return this._container.removeChildAt(...arguments)},MK_LightShadowSprite.prototype.removeLightChildren=function(){return this._container.removeChildren(...arguments)},Object.defineProperty(MK_LightShadowSprite.prototype,"lightChildren",{get:function(){return this._container.children}}),MK_LightShadowSprite.prototype.update=function(){Sprite.prototype.update.apply(this,arguments),this.updateRenderTexture()},MK_LightShadowSprite.prototype.updateRenderTexture=function(){var t;SceneManager._accumulator<2*SceneManager._deltaTime&&this.visible&&(t=Graphics._renderer,this._container&&(this._container.visible=!0,t.render(this._container,this.texture),this._container.visible=!1))};
+
+
 	var colorcycle_count = [1000];
 	var colorcycle_timer = [1000];
 
@@ -246,6 +262,8 @@ Imported.TerraxLighting = true;
 
 	var maxX = Number(parameters['Screensize X'] || 866);
 	var maxY = Number(parameters['Screensize Y'] || 630);
+
+	var defaultUseWebGL = parameters['defaultUseWebGL'] || 'No';
 
 	// global timing variables
 	var tint_oldseconds=0;
@@ -979,14 +997,33 @@ Imported.TerraxLighting = true;
 	    this._height = Graphics.height;
 	    this._sprites = [];
 	    this._createBitmap();
+
+		this._useWebGL = (defaultUseWebGL == 'Yes');
+
+		this._requestBitmapId = 0;
+		this._requestBitmapList = [];
+		this._spritesData = {};
+		this._createWebGLSprite();
 	};
+
+	Lightmask.prototype.useWebGL = function() {
+		return this._useWebGL && Graphics.isWebGL();
+	};
+
 	
 	//Updates the Lightmask for each frame.
 	
 	Lightmask.prototype.update = function() {
-		  	this._updateMask();
+		this._clearRequestBitmapList();
+		this._updateMask();
+		this._updateMaskTexture();
+	};
+	Lightmask.prototype._updateMaskTexture = function() {
 		if (SceneManager._accumulator < 2 * SceneManager._deltaTime) {
-			this._updateMaskBitmap();
+			this._refreshMaskSprite();
+			if (this._webGLMaskSprite) {
+				this._webGLMaskSprite.update();
+			}
 		}
 	};
 	
@@ -995,7 +1032,12 @@ Imported.TerraxLighting = true;
 	Lightmask.prototype._createBitmap = function() {
 	    this._maskBitmap = new Bitmap(maxX+20,maxY);   // one big bitmap to fill the intire screen with black
 	    var canvas = this._maskBitmap.canvas;             // a bit larger then setting to take care of screenshakes
+	};
 
+	Lightmask.prototype._createWebGLSprite = function() {
+		if (this.useWebGL()) {
+			this._webGLMaskSprite = new MK_LightShadowSprite(maxX+20, maxY);
+		}
 	};
 
 	function ReloadMapEvents() {
@@ -1157,14 +1199,13 @@ Imported.TerraxLighting = true;
 	}
 
 
-	// try optimizing for performance  (by Mikan 2021/08/10)
-	// redraw mask when render not update
-
 	/**
-	 * @method _updateSpritesData
+	 * @method _updateAllSprites
 	 * @private
 	 */
 	Lightmask.prototype._updateMask = function() {
+
+		StartTiming();
 
 		// ****** DETECT MAP CHANGES ********
 		var map_id = $gameMap.mapId();
@@ -1247,22 +1288,13 @@ Imported.TerraxLighting = true;
 			ReloadMapEvents();
 			//Graphics.Debug('EventSpawn', $gameMap.events().length);
 		}
-	};
 
-	/**
-	 * @method _updateSpritesTexture
-	 * @private
-	 */
-	Lightmask.prototype._updateMaskBitmap = function() {
 
-		StartTiming();
-
-		var map_id = $gameMap.mapId();
-
+	
 		// remove old sprites
-		for (var i = 0; i < this._sprites.length; i++) {	  // remove all old sprites
-			this._removeSprite();
-		}
+		this._removeAllSprite();
+		//this._requestAllBitmapHide_webGL();
+		this._removeAllWebGLMaskSubSprite();
 
 		if (options_lighting_on == true) {
 
@@ -1363,7 +1395,12 @@ Imported.TerraxLighting = true;
 					var darkenscreen = false;
 
 					if (searchdaynight.search('daynight') >= 0) {
-						this._addSprite(-20, 0, this._maskBitmap); // daynight tag? yes.. then turn off the lights
+						if (this.useWebGL()) {
+							this._addWebGLMaskSprite(-20, 0);
+						}
+						else {
+							this._addSprite(-20, 0, this._maskBitmap); // daynight tag? yes.. then turn off the lights
+						}
 						darkenscreen = true;
 					} else {
 						for (var i = 0; i < event_note.length; i++) {
@@ -1372,7 +1409,12 @@ Imported.TerraxLighting = true;
 								var note_args = note.split(" ");
 								var note_command = note_args.shift().toLowerCase();
 								if (note_command == "light" || note_command == "fire" || note_command == "daynight" || note_command == "flashlight") {
-									this._addSprite(-20, 0, this._maskBitmap); // light event? yes.. then turn off the lights
+									if (this.useWebGL()) {
+										this._addWebGLMaskSprite(-20, 0);
+									}
+									else {
+										this._addSprite(-20, 0, this._maskBitmap); // light event? yes.. then turn off the lights
+									}
 									darkenscreen = true;
 									break;
 								}
@@ -1429,7 +1471,9 @@ Imported.TerraxLighting = true;
 
 						var canvas = this._maskBitmap.canvas;
 						var ctx = canvas.getContext("2d");
-						this._maskBitmap.fillRect(0, 0, maxX + 20, maxY, '#000000');
+						//this._maskBitmap.fillRect(0, 0, maxX + 20, maxY, '#000000');
+						this._requestBitmap('Background', true, ctx.globalCompositeOperation, 
+							'fillRect', 0, 0, maxX + 20, maxY, '#000000');
 
 
 						ctx.globalCompositeOperation = 'lighter';
@@ -1473,7 +1517,9 @@ Imported.TerraxLighting = true;
 
 						if (iplayer_radius > 0) {
 							if (playerflashlight == true) {
-								this._maskBitmap.radialgradientFillRect2(x1, y1, 20, iplayer_radius, playercolor, '#000000', pd, flashlightlength, flashlightwidth);
+								//this._maskBitmap.radialgradientFillRect2(x1, y1, 20, iplayer_radius, playercolor, '#000000', pd, flashlightlength, flashlightwidth);
+								this._requestBitmap('Player_Flash', true, ctx.globalCompositeOperation, 
+									'radialgradientFillRect2', x1, y1, 20, iplayer_radius, playercolor, '#000000', pd, flashlightlength, flashlightwidth);
 							}
 							y1 = y1 - flashlightoffset;
 							if (iplayer_radius < 100) {
@@ -1495,9 +1541,13 @@ Imported.TerraxLighting = true;
 								}
 								var newcolor = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 
-								this._maskBitmap.radialgradientFillRect(x1, y1, 0, iplayer_radius, newcolor, '#000000', playerflicker, playerbrightness);
+								//this._maskBitmap.radialgradientFillRect(x1, y1, 0, iplayer_radius, newcolor, '#000000', playerflicker, playerbrightness);
+								this._requestBitmap('Player_Radius', true, ctx.globalCompositeOperation, 
+									'radialgradientFillRect', x1, y1, 0, iplayer_radius, newcolor, '#000000', playerflicker, playerbrightness);
 							} else {
-								this._maskBitmap.radialgradientFillRect(x1, y1, 20, iplayer_radius, playercolor, '#000000', playerflicker, playerbrightness);
+								//this._maskBitmap.radialgradientFillRect(x1, y1, 20, iplayer_radius, playercolor, '#000000', playerflicker, playerbrightness);
+								this._requestBitmap('Player_Radius', true, ctx.globalCompositeOperation, 
+									'radialgradientFillRect', x1, y1, 20, iplayer_radius, playercolor, '#000000', playerflicker, playerbrightness);
 							}
 
 						}
@@ -1595,7 +1645,10 @@ Imported.TerraxLighting = true;
 									var x1 = px - (dx * pw);
 									var y1 = py - (dy * ph);
 
-									this._maskBitmap.radialgradientFillRect(x1, y1, 0, lightset[0], lightset[1], '#000000', false);
+									//this._maskBitmap.radialgradientFillRect(x1, y1, 0, lightset[0], lightset[1], '#000000', false);
+									this._requestBitmap('ABS_skill'+i, true, ctx.globalCompositeOperation, 
+										'radialgradientFillRect', x1, y1, 0, lightset[0], lightset[1], '#000000', false);
+									// TODO
 								}
 							}
 						}
@@ -1897,7 +1950,10 @@ Imported.TerraxLighting = true;
 											y1 = y1 + (ph / 2);
 
 											//Graphics.Debug('Test',dy+" "+py+" "+y1+" "+$gameMap.height()+" "+lyjump);
-											this._maskBitmap.radialgradientFillRect(x1, y1, 0, fradius, fcolor, '#000000', false);
+											//this._maskBitmap.radialgradientFillRect(x1, y1, 0, fradius, fcolor, '#000000', false);
+											this._requestBitmap('ABS_blast'+i, true, ctx.globalCompositeOperation, 
+												'radialgradientFillRect', x1, y1, 0, fradius, fcolor, '#000000', false);
+											// TODO
 										}
 									} else {
 										Terrax_ABS_blast[i] = "DELETE";
@@ -2293,10 +2349,15 @@ Imported.TerraxLighting = true;
 											}
 
 											if (flashlight == true) {
-												this._maskBitmap.radialgradientFillRect2(lx1, ly1, 0, light_radius, colorvalue, '#000000', ldir, flashlength, flashwidth);
+												//this._maskBitmap.radialgradientFillRect2(lx1, ly1, 0, light_radius, colorvalue, '#000000', ldir, flashlength, flashwidth);
+												this._requestBitmap('Flashlight_event'+i, true, ctx.globalCompositeOperation, 
+													'radialgradientFillRect2', lx1, ly1, 0, light_radius, colorvalue, '#000000', ldir, flashlength, flashwidth);
 											} else {
-												this._maskBitmap.radialgradientFillRect(lx1, ly1, 0, light_radius, colorvalue, '#000000', objectflicker, brightness, direction);
+												//this._maskBitmap.radialgradientFillRect(lx1, ly1, 0, light_radius, colorvalue, '#000000', objectflicker, brightness, direction);
+												this._requestBitmap('Flashlight_event'+i, true, ctx.globalCompositeOperation, 
+													'radialgradientFillRect', lx1, ly1, 0, light_radius, colorvalue, '#000000', objectflicker, brightness, direction);
 											}
+											// TODO
 
 										}
 
@@ -2368,9 +2429,13 @@ Imported.TerraxLighting = true;
 							}
 
 							if (tile_type == 3 || tile_type == 4) {
-								this._maskBitmap.radialgradientFillRect(x1, y1, 0, tile_radius, tile_color, '#000000', false, brightness); // Light
+								//this._maskBitmap.radialgradientFillRect(x1, y1, 0, tile_radius, tile_color, '#000000', false, brightness); // Light
+								this._requestBitmap('Tile_light'+i, true, ctx.globalCompositeOperation, 
+									'radialgradientFillRect', x1, y1, 0, tile_radius, tile_color, '#000000', false, brightness); // Light
 							} else if (tile_type == 5 || tile_type == 6) {
-								this._maskBitmap.radialgradientFillRect(x1, y1, 0, tile_radius, tile_color, '#000000', true, brightness);  // Fire
+								//this._maskBitmap.radialgradientFillRect(x1, y1, 0, tile_radius, tile_color, '#000000', true, brightness);  // Fire
+								this._requestBitmap('Tile_light'+i, true, ctx.globalCompositeOperation, 
+									'radialgradientFillRect', x1, y1, 0, tile_radius, tile_color, '#000000', true, brightness);  // Fire
 							} else {
 
 								//Graphics.Debug('Tiletype',tile_type);
@@ -2404,7 +2469,9 @@ Imported.TerraxLighting = true;
 
 								var newtile_color = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 								//Graphics.Debug('Tiletype',tileglow+' '+r+' '+g+' '+b+' '+newtile_color);
-								this._maskBitmap.radialgradientFillRect(x1, y1, 0, tile_radius, newtile_color, '#000000', false, brightness);
+								//this._maskBitmap.radialgradientFillRect(x1, y1, 0, tile_radius, newtile_color, '#000000', false, brightness);
+								this._requestBitmap('Tile_light'+i, true, ctx.globalCompositeOperation, 
+									'radialgradientFillRect', x1, y1, 0, tile_radius, newtile_color, '#000000', false, brightness);
 							}
 
 
@@ -2443,18 +2510,24 @@ Imported.TerraxLighting = true;
 								}
 							}
 							if (shape == 0) {
-								this._maskBitmap.FillRect(x1, y1, pw, ph, tile_color);
+								//this._maskBitmap.FillRect(x1, y1, pw, ph, tile_color);
+								this._requestBitmap('Tile_shape'+i, true, ctx.globalCompositeOperation, 
+									'FillRect', x1, y1, pw, ph, tile_color);
 							}
 							if (shape == 1) {
 								x1 = x1 + Number(xo1);
 								y1 = y1 + Number(yo1);
-								this._maskBitmap.FillRect(x1, y1, Number(xo2), Number(yo2), tile_color);
+								//this._maskBitmap.FillRect(x1, y1, Number(xo2), Number(yo2), tile_color);
+								this._requestBitmap('Tile_shape'+i, true, ctx.globalCompositeOperation, 
+									'FillRect', x1, y1, Number(xo2), Number(yo2), tile_color);
 							}
 							if (shape == 2) {
 								x1 = x1 + Number(xo1);
 								y1 = y1 + Number(yo1);
 								//this._maskBitmap.FillRect(x1,y1,pw,ph,tile_color);
-								this._maskBitmap.FillCircle(x1, y1, Number(xo2), Number(yo2), tile_color);
+								//this._maskBitmap.FillCircle(x1, y1, Number(xo2), Number(yo2), tile_color);
+								this._requestBitmap('Tile_shape'+i, true, ctx.globalCompositeOperation, 
+									'FillCircle', x1, y1, Number(xo2), Number(yo2), tile_color);
 							}
 						}
 						ctx.globalCompositeOperation = 'lighter';
@@ -2497,7 +2570,9 @@ Imported.TerraxLighting = true;
 							}
 							color1 = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 
-							this._maskBitmap.FillRect(0, 0, maxX + 20, maxY, color1);
+							//this._maskBitmap.FillRect(0, 0, maxX + 20, maxY, color1);
+							this._requestBitmap('daynightset', true, ctx.globalCompositeOperation, 
+								'FillRect', 0, 0, maxX + 20, maxY, color1);
 						}
 
 						// *********************************** TINT **************************
@@ -2597,7 +2672,9 @@ Imported.TerraxLighting = true;
 
 							//Graphics.Debug('TINT',tint_value+' '+tint_target+' '+tint_speed+' '+tcolor);
 
-							this._maskBitmap.FillRect(-20, 0, maxX + 20, maxY, tcolor);
+							//this._maskBitmap.FillRect(-20, 0, maxX + 20, maxY, tcolor);
+							this._requestBitmap('tint', true, ctx.globalCompositeOperation, 
+								'FillRect', -20, 0, maxX + 20, maxY, tcolor);
 						}
 
 						// reset drawmode to normal
@@ -2609,6 +2686,243 @@ Imported.TerraxLighting = true;
 		}
 		StopTiming();
 	};
+
+
+
+	Lightmask.prototype._compareSpriteData = function(key, visible, drawmode, drawOper, ...args) {
+		var obj = this._spritesData[key];
+		if (!obj) {
+			obj = {
+				sprite : null, 
+				bitmap : null, 
+				data : {
+					visible : false, 
+					drawmode : '', // globalCompositeOperation
+					blendMode : 0, 
+					drawOper : '', 
+					origArgs : [], 
+					methodArgs : [], 
+
+					x : 0, 
+					y : 0, 
+					width : 0, 
+					height : 0, 
+					drawX : 0, 
+					drawY : 0, 
+				}, 
+				needResize : false, 
+				needRedraw : false, 
+			};
+			this._spritesData[key] = obj;
+
+			obj.bitmap = new Bitmap(1, 1);
+			obj.sprite = new Sprite(obj.bitmap);
+
+			obj.sprite.visible = false;
+		}
+		obj.needResize = !!obj.needResize;
+		obj.needRedraw = !!obj.needRedraw;
+
+		var x = 0, y = 0, width = 0, height = 0, drawX = 0, drawY = 0;
+		if (drawOper == 'fillRect') {
+			x = args[0];
+			y = args[1];
+			width = args[2];
+			height = args[3];
+			drawX = 0;
+			drawY = 0;
+		}
+		else if (drawOper == 'FillCircle') {
+			x = args[0] - args[2];
+			y = args[1] - args[3];
+			width = args[2] * 2;
+			height = args[3] * 2;
+			drawX = args[2];
+			drawY = args[3];
+		}
+		else if (drawOper == 'radialgradientFillRect') {
+			var rect = Bitmap.calRect_radialgradientFillRect(...args);
+			x = rect.x;
+			y = rect.y;
+			width  = rect.width;
+			height = rect.height;
+			drawX = args[0] - rect.x;
+			drawY = args[1] - rect.y;
+			// TODO : 考虑 Math.random
+		}
+		else if (drawOper == 'radialgradientFillRect2') {
+			var rect = Bitmap.calRect_radialgradientFillRect2(...args);
+			x = rect.x;
+			y = rect.y;
+			width  = rect.width;
+			height = rect.height;
+			drawX = args[0] - rect.x;
+			drawY = args[1] - rect.y;
+		}
+
+		x = Math.round(x);
+		y = Math.round(y);
+		width = Math.round(width);
+		height = Math.round(height);
+		drawX = Math.round(drawX);
+		drawY = Math.round(drawY);
+
+		var data = obj.data;
+		data.visible = !!visible;
+
+		data.drawmode = drawmode;
+		data.blendMode = {
+			//'source-over' : 0, 
+			//'lighter' : 1, 
+			//'multiply' : 2, // ？无法准确实现 ...
+			'source-over' : PIXI.BLEND_MODES.OVERLAY, // ?
+			'lighter' : PIXI.BLEND_MODES.ADD, // ?
+			'multiply' : PIXI.BLEND_MODES.MULTIPLY, // ？无法准确实现 ...
+		}[drawmode] || 0;
+
+		if (obj.needRedraw || data.drawOper != drawOper) {
+			data.drawOper = drawOper;
+			obj.needRedraw = true;
+		}
+
+		data.x = x;
+		data.y = y;
+		if (obj.needRedraw || obj.needResize || data.width != width || data.height != height) {
+			data.width = width;
+			data.height = height;
+			obj.needResize = true;
+			obj.needRedraw = true;
+		}
+		if (obj.needRedraw || data.drawX != drawX || data.drawY != drawY) {
+			data.drawX = drawX;
+			data.drawY = drawY;
+			obj.needRedraw = true;
+		}
+
+		var diffArgs = data.origArgs.length != args.length;
+		if (!diffArgs) {
+			for (var i = 2, j = args.length; i < j; i++) {
+				if (data.origArgs[i] !== args[i]) {
+					diffArgs = true;
+					break;
+				}
+			}
+		}
+		if (obj.needRedraw || diffArgs) {
+			//data.origArgs.splice(0, data.origArgs.length, ...args);
+			data.methodArgs.splice(0, data.methodArgs.length, ...args);
+			//data.methodArgs.splice(0, data.methodArgs.length, drawX, drawY, ...args.slice(2));
+			obj.needRedraw = true;
+		}
+
+		data.origArgs.splice(0, data.origArgs.length, ...args);
+		data.methodArgs[0] = drawX;
+		data.methodArgs[1] = drawY;
+
+		return obj;
+	};
+
+
+	Lightmask.prototype._refreshMaskSubSprite_webGL = function(key) {
+		var obj = this._spritesData[key];
+		if (!obj) return ;
+
+		var sprite = obj.sprite;
+		var bitmap = obj.bitmap;
+		var data = obj.data;
+
+		sprite.visible = data.visible;
+		sprite.blendMode = data.blendMode;
+		sprite.x = data.x;
+		sprite.y = data.y;
+
+		if (obj.needResize) {
+			bitmap.resize(data.width, data.height);
+			sprite.setFrame(0, 0, data.width, data.height);
+			obj.needResize = false;
+		}
+
+		if (obj.needRedraw && typeof bitmap[data.drawOper] === 'function') {
+			bitmap.clear();
+			bitmap.context.globalCompositeOperation = data.drawmode;
+			bitmap[data.drawOper](...data.methodArgs);
+			obj.needRedraw = false;
+		}
+
+		this._addWebGLMaskSubSprite(sprite);
+	};
+	Lightmask.prototype._refreshMaskSprite_webGL = function() {
+		for (var key of this._requestBitmapList) {
+			this._refreshMaskSubSprite_webGL(key);
+		}
+	};
+
+	Lightmask.prototype._refreshMaskSubSprite_canvas = function(key) {
+		var obj = this._spritesData[key];
+		if (!obj) return ;
+
+		var data = obj.data;
+		if (typeof this._maskBitmap[data.drawOper] === 'function') {
+			var ctx = this._maskBitmap.context;
+			var oldDrawMode = ctx.globalCompositeOperation;
+			ctx.globalCompositeOperation = data.drawmode;
+			this._maskBitmap[data.drawOper](...data.origArgs);
+			ctx.globalCompositeOperation = oldDrawMode;
+			obj.needResize = false;
+			obj.needRedraw = false;
+		}
+	};
+	Lightmask.prototype._refreshMaskSprite_canvas = function() {
+		for (var key of this._requestBitmapList) {
+			this._refreshMaskSubSprite_canvas(key);
+		}
+	};
+
+	Lightmask.prototype._refreshMaskSprite = function() {
+		if (this.useWebGL()) {
+			this._refreshMaskSprite_webGL(...arguments);
+		}
+		else {
+			this._refreshMaskSprite_canvas(...arguments);
+		}
+	};
+
+
+	Lightmask.prototype._clearRequestBitmapList = function() {
+		this._requestBitmapId = 0;
+		this._requestBitmapList.splice(0);
+	};
+
+	Lightmask.prototype._requestBitmap_webGL = function(key, visible, drawmode, drawOper, ...args) {
+		this._compareSpriteData(...arguments);
+		this._requestBitmapList[this._requestBitmapId++] = key;
+	};
+	Lightmask.prototype._requestBitmap_canvas = function(key, visible, drawmode, drawOper, ...args) {
+		this._compareSpriteData(...arguments);
+		this._requestBitmapList[this._requestBitmapId++] = key;
+	};
+	Lightmask.prototype._requestBitmap = function() {
+		if (this.useWebGL()) {
+			this._requestBitmap_webGL(...arguments);
+		}
+		else {
+			this._requestBitmap_canvas(...arguments);
+		}
+	};
+
+
+	Lightmask.prototype._requestBitmapHide_webGL = function(key) {
+		var obj = this._spritesData[key];
+		if (obj) {
+			obj.data.visible = false;
+		}
+	};
+	Lightmask.prototype._requestAllBitmapHide_webGL = function(key) {
+		for (var key in this._spritesData) {
+			this._requestBitmapHide_webGL(key); 
+		}
+	};
+
 
 	/**
 	 * @method _addSprite
@@ -2629,6 +2943,19 @@ Imported.TerraxLighting = true;
 	    sprite.ay = 0;
 	 	sprite.opacity = 255;
 	};
+
+	Lightmask.prototype._addWebGLMaskSprite = function(x, y) {
+		if (this._webGLMaskSprite) {
+			this._webGLMaskSprite.x = x;
+			this._webGLMaskSprite.y = y;
+			this.addChild(this._webGLMaskSprite);
+		}
+	};
+	Lightmask.prototype._addWebGLMaskSubSprite = function(sprite) {
+		if (this._webGLMaskSprite) {
+			this._webGLMaskSprite.addLightChild(sprite);
+		}
+	};
 	
 	/**
 	 * @method _removeSprite
@@ -2637,7 +2964,19 @@ Imported.TerraxLighting = true;
 	Lightmask.prototype._removeSprite = function() {
 	    this.removeChild(this._sprites.pop());
 	};
-	
+
+	Lightmask.prototype._removeAllSprite = function() {
+		for (var i = 0; i < this._sprites.length; i++) {	  // remove all old sprites
+			this._removeSprite();
+		}
+	};
+
+	Lightmask.prototype._removeAllWebGLMaskSubSprite = function() {
+		if (this._webGLMaskSprite) {
+			this._webGLMaskSprite.removeLightChildren();
+		}
+	};
+
 
 	// *******************  NORMAL BOX SHAPE ***********************************
 	
@@ -2787,6 +3126,44 @@ Imported.TerraxLighting = true;
 			this._setDirty();
 		}
 	};
+	Bitmap.calRect_radialgradientFillRect = function(x1, y1, r1, r2, color1, color2, flicker, brightness, direction) {
+		x1 = x1 + 20;
+
+		var arr = [];
+
+		direction = Number(direction || 0);
+		var pw = $gameMap.tileWidth() / 2;
+		var ph = $gameMap.tileHeight() / 2;
+		switch (direction) {
+			case 0:
+				arr = [x1 - r2, y1 - r2, r2 * 2, r2 * 2];
+				break;
+			case 1:
+				arr = [x1 - r2, y1 - ph, r2 * 2, r2 * 2];
+				break;
+			case 2:
+				arr = [x1 - r2, y1 - r2, r2 * 1 + pw, r2 * 2];
+				break;
+			case 3:
+				arr = [x1 - r2, y1 - r2, r2 * 2, r2 * 1 + ph];
+				break;
+			case 4:
+				arr = [x1 - pw, y1 - r2, r2 * 2, r2 * 2];
+				break;
+			default:
+				arr = [x1 - r2, y1 - r2, r2 * 2, r2 * 2];
+		}
+
+		var minX = arr[0], maxX = arr[0] + arr[2];
+		var minY = arr[1], maxY = arr[1] + arr[3];
+
+		return {
+			minX : minX, maxX : maxX, 
+			minY : minY, maxY : maxY, 
+			x : minX, y : minY, 
+			width : maxX - minX, height : maxY - minY, 
+		};
+	};
 	
 	// ********************************** FLASHLIGHT *************************************
 	// Fill gradient Cone
@@ -2856,6 +3233,47 @@ Imported.TerraxLighting = true;
 	    this._setDirty();
 	};
 	
+	Bitmap.calRect_radialgradientFillRect2 = function(x1, y1, r1, r2, color1, color2, direction, flashlength, flashwidth) {
+		x1 = x1 + 20;
+
+	    r1 = 1;
+	  	r2 = 40;
+	  	
+		var minX = x1 - r2, maxX = x1 + r2;
+		var minY = y1 - r2, maxY = y1 + r2;
+
+		for (var cone = 0; cone < flashlength; cone++) {
+			var flashlightdensity =  $gameVariables.GetFlashlightDensity();
+			r1 = cone * flashlightdensity;
+			r2 = cone * flashwidth;
+			switch(direction) {
+				case 6:
+					x1 = x1 + cone*6;
+					break;
+				case 4:
+					x1 = x1 - cone*6;
+					break;
+				case 2:
+					y1 = y1 + cone*6;
+					break;
+				case 8:
+					y1 = y1 - cone*6;
+					break;
+			}
+
+	  		minX = Math.min(minX, x1 - r2);
+			maxX = Math.max(maxX, x1 + r2);
+			minY = Math.min(minY, y1 - r2);
+			maxY = Math.max(maxY, y1 + r2);
+		}
+
+		return {
+			minX : minX, maxX : maxX, 
+			minY : minY, maxY : maxY, 
+			x : minX, y : minY, 
+			width : maxX - minX, height : maxY - minY, 
+		};
+	};
 	
 	function hexToRgb(hex) {
     	var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
