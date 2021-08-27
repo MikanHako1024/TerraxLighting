@@ -985,6 +985,9 @@ Imported.TerraxLighting = true;
 	
 	Lightmask.prototype.update = function() {
 		  	this._updateMask();
+		if (SceneManager._accumulator < 2 * SceneManager._deltaTime) {
+			this._updateMaskBitmap();
+		}
 	};
 	
 	//@method _createBitmaps
@@ -1250,7 +1253,7 @@ Imported.TerraxLighting = true;
 	 * @method _updateSpritesTexture
 	 * @private
 	 */
-	Lightmask.prototype.updateMaskBitmap = function() {
+	Lightmask.prototype._updateMaskBitmap = function() {
 
 		StartTiming();
 
@@ -2606,16 +2609,6 @@ Imported.TerraxLighting = true;
 		}
 		StopTiming();
 	};
-
-
-	Lightmask.prototype._renderWebGL = function (renderer) {
-		this.updateMaskBitmap();
-	};
-
-	Lightmask.prototype._renderCanvas = function (renderer) {
-		this.updateMaskBitmap();
-	};
-
 
 	/**
 	 * @method _addSprite
